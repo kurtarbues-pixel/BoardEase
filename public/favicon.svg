@@ -1,5 +1,8 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <rect width="64" height="64" rx="14" fill="#1f3a5f" />
-  <text x="32" y="42" font-family="system-ui, -apple-system, sans-serif" font-size="30" font-weight="800" fill="#ffffff" text-anchor="middle">BH</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <rect width="256" height="256" rx="48" fill="#576238" />
+  <path d="M27 116 128 34l101 82h-27v93H47v-93H27Z" fill="#F0EADC" />
+  <rect x="110" y="151" width="36" height="58" rx="5" fill="#576238" />
+  <rect x="65" y="132" width="22" height="22" rx="4" fill="#576238" />
+  <rect x="169" y="132" width="22" height="22" rx="4" fill="#576238" />
 </svg>
 

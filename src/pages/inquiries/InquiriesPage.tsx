@@ -4,6 +4,7 @@ import { api, fetchAll, formatMoney } from '../../api/client';
 import { Inquiry } from '../../types';
 import { StatusBadge } from '../../components/Common/StatusBadge';
 import { LoadingState, EmptyState, ErrorState } from '../../components/Common/States';
+import { formatBusinessDate, formatBusinessDateTime } from '../../utils/date';
 
 interface InquiriesPageProps {
   announce: (message: string, kind?: 'success' | 'error' | 'warning' | 'info') => void;
@@ -11,7 +12,8 @@ interface InquiriesPageProps {
 
 export const InquiriesPage: React.FC<InquiriesPageProps> = ({ announce }) => {
   const { user } = useAuth();
-  const canManage = user?.role !== 'tenant';
+  const canManage = user?.role === 'landlord' || user?.role === 'staff';
+  const isAdmin = user?.role === 'admin';
 
   const [inquiries, setInquiries] = useState<Inquiry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -38,7 +40,7 @@ export const InquiriesPage: React.FC<InquiriesPageProps> = ({ announce }) => {
   const handleDecision = async (inquiry: Inquiry, action: 'approve' | 'reject') => {
     const isApprove = action === 'approve';
     const confirmMessage = isApprove
-      ? `Approve request from ${inquiry.tenant?.name || 'tenant'} for Room ${inquiry.room?.room_number}? This will automatically create an active lease!`
+      ? `Offer Room ${inquiry.room?.room_number} to ${inquiry.tenant?.name || 'tenant'}? The room will be held for 24 hours while they respond.`
       : `Decline request from ${inquiry.tenant?.name || 'tenant'}?`;
 
     if (!window.confirm(confirmMessage)) return;
@@ -48,7 +50,7 @@ export const InquiriesPage: React.FC<InquiriesPageProps> = ({ announce }) => {
       await api(`/inquiries/${inquiry.id}/${action}`, { method: 'POST' });
       announce(
         isApprove
-          ? 'Request approved! Lease created and room marked occupied.'
+          ? 'Rental offer sent. The room is held for 24 hours.'
           : 'Request has been declined.'
       );
       await loadInquiries();
@@ -63,16 +65,13 @@ export const InquiriesPage: React.FC<InquiriesPageProps> = ({ announce }) => {
     <div className="inquiries-page">
       <div className="welcome-block">
         <div>
-          <h2>{canManage ? 'Room Requests' : 'My Rental Requests'}</h2>
+          <h2>{canManage ? 'Applications for My Rooms' : isAdmin ? 'Application Oversight' : 'My Rental Requests'}</h2>
           <p className="muted">
             {canManage
-              ? 'Review inquiries from prospective tenants. Approving a request instantly initiates an active lease.'
-              : 'Track the status and landlord responses to your submitted room rental inquiries.'}
+              ? 'Review applications for your listings. Select an applicant to send a 24-hour rental offer.'
+              : isAdmin ? 'Review application status across the platform.' : 'Track your rental applications and respond to any offer within 24 hours.'}
           </p>
         </div>
-        <button type="button" className="button secondary" onClick={loadInquiries}>
-          Refresh
-        </button>
       </div>
 
       {loading ? (
@@ -92,6 +91,7 @@ export const InquiriesPage: React.FC<InquiriesPageProps> = ({ announce }) => {
         <div className="request-list">
           {inquiries.map((inquiry) => {
             const isPending = inquiry.status.toLowerCase() === 'pending';
+            const offerPending = inquiry.status.toLowerCase() === 'approved' && Boolean(inquiry.offer_expires_at && new Date(inquiry.offer_expires_at) > new Date());
             const isProcessing = processingId === inquiry.id;
 
             return (
@@ -116,15 +116,17 @@ export const InquiriesPage: React.FC<InquiriesPageProps> = ({ announce }) => {
                   )}
 
                   <div className="inquiry-meta">
-                    <small>
+                    {user?.role !== 'tenant' && <small>
                       <strong>Tenant:</strong> {inquiry.tenant?.name} ({inquiry.tenant?.email}
                       {inquiry.tenant?.phone ? ` · ${inquiry.tenant.phone}` : ''})
-                    </small>
+                    </small>}
                     {inquiry.created_at && (
                       <small className="date-sub">
-                        Submitted: {new Date(inquiry.created_at).toLocaleDateString()}
+                        Submitted: {formatBusinessDate(inquiry.created_at)}
                       </small>
                     )}
+                    {offerPending && <small className="date-sub">Offer expires: {formatBusinessDateTime(inquiry.offer_expires_at)}</small>}
+                    {inquiry.decision_reason && <small className="date-sub">Decision note: {inquiry.decision_reason}</small>}
                   </div>
                 </div>
 
@@ -136,7 +138,7 @@ export const InquiriesPage: React.FC<InquiriesPageProps> = ({ announce }) => {
                       disabled={isProcessing}
                       onClick={() => handleDecision(inquiry, 'approve')}
                     >
-                      {isProcessing ? 'Processing…' : 'Approve & Create Lease'}
+                      {isProcessing ? 'Processing…' : 'Send 24-hour Offer'}
                     </button>
                     <button
                       type="button"
@@ -146,6 +148,24 @@ export const InquiriesPage: React.FC<InquiriesPageProps> = ({ announce }) => {
                     >
                       Decline
                     </button>
+                  </div>
+                )}
+                {user?.role === 'tenant' && offerPending && (
+                  <div className="inline-actions">
+                    <button type="button" className="button primary" disabled={isProcessing} onClick={async () => {
+                      if (!window.confirm(`Accept the offer for Room ${inquiry.room?.room_number}? This will start your lease.`)) return;
+                      setProcessingId(inquiry.id);
+                      try { await api(`/inquiries/${inquiry.id}/accept`, { method: 'POST' }); announce('Offer accepted. Please review and accept your digital lease agreement in My Lease.'); await loadInquiries(); }
+                      catch (err: any) { announce(err.message || 'Could not accept offer.', 'error'); }
+                      finally { setProcessingId(null); }
+                    }}>Accept Offer</button>
+                    <button type="button" className="button secondary" disabled={isProcessing} onClick={async () => {
+                      if (!window.confirm('Decline this room offer? The room will become available to other applicants.')) return;
+                      setProcessingId(inquiry.id);
+                      try { await api(`/inquiries/${inquiry.id}/decline`, { method: 'POST' }); announce('Offer declined.'); await loadInquiries(); }
+                      catch (err: any) { announce(err.message || 'Could not decline offer.', 'error'); }
+                      finally { setProcessingId(null); }
+                    }}>Decline Offer</button>
                   </div>
                 )}
               </article>

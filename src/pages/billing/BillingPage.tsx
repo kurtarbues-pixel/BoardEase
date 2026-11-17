@@ -1,20 +1,30 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import { api, fetchAll, formatMoney, getCurrentMonthString } from '../../api/client';
-import { Charge, ChargeCategory, Invoice, Lease } from '../../types';
+import { api, fetchAll, formatMoney, getCurrentMonthString, downloadProtectedPdf } from '../../api/client';
+import { Charge, ChargeCategory, Invoice, Lease, PaymentRecord, SimulatedPaymentResponse } from '../../types';
 import { Panel } from '../../components/Common/Panel';
 import { Field } from '../../components/Common/Field';
 import { Modal } from '../../components/Common/Modal';
 import { StatusBadge } from '../../components/Common/StatusBadge';
+import { formatBusinessDate } from '../../utils/date';
 import { LoadingState, EmptyState, ErrorState } from '../../components/Common/States';
+import { SimulatedPaymentModal } from '../../components/Billing/SimulatedPaymentModal';
+import { PaymentHistory } from '../../components/Billing/PaymentHistory';
+import { PaymentReceipt } from '../../components/Billing/PaymentReceipt';
+import { createUuid } from '../../utils/uuid';
 
 interface BillingPageProps {
   announce: (message: string, kind?: 'success' | 'error' | 'warning' | 'info') => void;
 }
 
+const chargeCategoryLabel = (charge: Charge) => charge.utility_type
+  ? `${charge.utility_type.charAt(0).toUpperCase()}${charge.utility_type.slice(1)} utility`
+  : charge.category;
+
 export const BillingPage: React.FC<BillingPageProps> = ({ announce }) => {
   const { user } = useAuth();
-  const canManage = user?.role !== 'tenant';
+  const isTenant = user?.role === 'tenant';
+  const canManage = user?.role === 'admin' || user?.role === 'landlord' || user?.role === 'staff';
 
   const [leases, setLeases] = useState<Lease[]>([]);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
@@ -22,7 +32,7 @@ export const BillingPage: React.FC<BillingPageProps> = ({ announce }) => {
   const [error, setError] = useState('');
 
   // Generate invoices state
-  const [billingPeriod, setBillingPeriod] = useState<string>(getCurrentMonthString());
+  const [invoiceDate, setInvoiceDate] = useState<string>(`${getCurrentMonthString()}-01`);
   const [generating, setGenerating] = useState(false);
 
   // Add charge form state
@@ -30,6 +40,9 @@ export const BillingPage: React.FC<BillingPageProps> = ({ announce }) => {
   const [chargeCategory, setChargeCategory] = useState<ChargeCategory>('CANTEEN');
   const [chargeDescription, setChargeDescription] = useState('');
   const [chargeAmount, setChargeAmount] = useState('');
+  const [chargeBillingPeriod, setChargeBillingPeriod] = useState(getCurrentMonthString());
+  const [chargeUtilityType, setChargeUtilityType] = useState<'electricity' | 'water' | 'wifi'>('electricity');
+  const [chargeClientUuid, setChargeClientUuid] = useState(createUuid);
   const [isAddingCharge, setIsAddingCharge] = useState(false);
 
   // Record payment modal state
@@ -38,33 +51,49 @@ export const BillingPage: React.FC<BillingPageProps> = ({ announce }) => {
   const [paymentMethod, setPaymentMethod] = useState('cash');
   const [paymentNotes, setPaymentNotes] = useState('');
   const [isRecordingPayment, setIsRecordingPayment] = useState(false);
+  const [simulatedInvoice, setSimulatedInvoice] = useState<Invoice | null>(null);
+  const [preparingPaymentId, setPreparingPaymentId] = useState<number | null>(null);
+  const [receiptPayment, setReceiptPayment] = useState<PaymentRecord | null>(null);
+  const [receiptInvoice, setReceiptInvoice] = useState<Invoice | undefined>();
 
   const loadData = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
-      const [leasesData, invoicesData] = await Promise.all([
-        fetchAll<Lease>('/leases'),
-        fetchAll<Invoice>('/invoices'),
-      ]);
-      setLeases(leasesData);
+      // Invoices are the primary data for tenant payment access. Load and
+      // retain them independently so an unrelated lease-list failure cannot
+      // hide the tenant's Pay Now actions.
+      const invoicesData = await fetchAll<Invoice>('/invoices');
       setInvoices(invoicesData);
+
+      try {
+        setLeases(await fetchAll<Lease>('/leases'));
+      } catch (leaseError) {
+        if (!isTenant) throw leaseError;
+        setLeases([]);
+      }
     } catch (err: any) {
       setError(err.message || 'Failed to load billing records.');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [isTenant]);
 
   useEffect(() => {
     loadData();
   }, [loadData]);
 
   const handleGenerateInvoices = async () => {
-    if (!billingPeriod) {
-      announce('Please choose a billing month.', 'warning');
+    if (!invoiceDate) {
+      announce('Please choose a valid invoice date.', 'warning');
       return;
     }
+    const billingPeriod = invoiceDate.slice(0, 7);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(invoiceDate)) {
+      announce('Please choose a valid invoice date.', 'warning');
+      return;
+    }
+    if (!window.confirm(`Generate or update invoices for ${billingPeriod}?`)) return;
 
     setGenerating(true);
     try {
@@ -72,7 +101,7 @@ export const BillingPage: React.FC<BillingPageProps> = ({ announce }) => {
         '/invoices/generate',
         {
           method: 'POST',
-          body: { period: billingPeriod },
+          body: { period: invoiceDate },
         }
       );
       announce(
@@ -83,6 +112,32 @@ export const BillingPage: React.FC<BillingPageProps> = ({ announce }) => {
       announce(err.message || 'Invoice generation failed.', 'error');
     } finally {
       setGenerating(false);
+    }
+  };
+
+  const downloadInvoice = async (invoice: Invoice) => {
+    try { await downloadProtectedPdf(`/invoices/${invoice.id}/pdf`, `BoardEase-Invoice-${invoice.id}.pdf`); }
+    catch (err: any) { announce(err.message || 'Could not download invoice.', 'error'); }
+  };
+
+  // Re-fetch immediately before opening payment so stale portal data cannot
+  // present an already-paid invoice or an outdated balance as payable.
+  const startSimulatedPayment = async (invoice: Invoice) => {
+    if (user?.role !== 'tenant' || preparingPaymentId !== null) return;
+    setPreparingPaymentId(invoice.id);
+    try {
+      const response = await api<{ data: Invoice }>(`/invoices/${invoice.id}`);
+      const currentInvoice = response.data;
+      if (!currentInvoice || Number(currentInvoice.balance) <= 0 || currentInvoice.status.toLowerCase() === 'paid') {
+        announce('This invoice has no remaining balance. Your invoice list has been refreshed.', 'info');
+        await loadData();
+        return;
+      }
+      setSimulatedInvoice(currentInvoice);
+    } catch (err: any) {
+      announce(err.message || 'Could not retrieve this invoice for payment.', 'error');
+    } finally {
+      setPreparingPaymentId(null);
     }
   };
 
@@ -101,11 +156,15 @@ export const BillingPage: React.FC<BillingPageProps> = ({ announce }) => {
           category: chargeCategory,
           description: chargeDescription.trim() || undefined,
           amount: Number(chargeAmount),
+          billing_period: chargeBillingPeriod,
+          utility_type: chargeCategory === 'APPLIANCE' ? chargeUtilityType : null,
+          client_uuid: chargeClientUuid,
         },
       });
       announce('Additional charge added to pending ledger.');
       setChargeDescription('');
       setChargeAmount('');
+      setChargeClientUuid(createUuid());
       await loadData();
     } catch (err: any) {
       announce(err.message || 'Failed to record charge.', 'error');
@@ -135,9 +194,23 @@ export const BillingPage: React.FC<BillingPageProps> = ({ announce }) => {
     setPaymentNotes('');
   };
 
+  const handleSimulationComplete = async (result: SimulatedPaymentResponse) => {
+    setSimulatedInvoice(null);
+    setReceiptInvoice(result.invoice);
+    setReceiptPayment(result.payment);
+    setInvoices((current) => current.map((item) => item.id === result.invoice.id ? result.invoice : item));
+    if (result.payment.transaction_status === 'succeeded') {
+      announce(`Simulated payment succeeded. Reference ${result.payment.reference_number}. No real money was processed.`, 'success');
+    } else {
+      announce(`Simulated payment failed. Reference ${result.payment.reference_number}. Your invoice balance was not changed.`, 'warning');
+    }
+    await loadData();
+  };
+
   const handleRecordPayment = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!paymentInvoice) return;
+    if (!window.confirm(`Record a payment of ${formatMoney(paymentAmount)} for this invoice?`)) return;
 
     setIsRecordingPayment(true);
     try {
@@ -160,10 +233,18 @@ export const BillingPage: React.FC<BillingPageProps> = ({ announce }) => {
   };
 
   const activeLeases = leases.filter((l) => l.status === 'active');
+  const outstandingInvoices = invoices.filter((invoice) => Number(invoice.balance) > 0 && invoice.status.toLowerCase() !== 'paid');
+  const paidInvoices = invoices.filter((invoice) => Number(invoice.balance) <= 0 || invoice.status.toLowerCase() === 'paid');
+  const totalOutstanding = outstandingInvoices.reduce((total, invoice) => total + Number(invoice.balance || 0), 0);
 
   const pendingCharges = leases.flatMap((lease) =>
     (lease.charges || [])
       .filter((charge) => charge.status?.toLowerCase() === 'pending')
+      .map((charge) => ({ ...charge, lease }))
+  );
+  const tenantCharges = leases.flatMap((lease) =>
+    (lease.charges || [])
+      .filter((charge) => !['void', 'voided'].includes(charge.status?.toLowerCase()))
       .map((charge) => ({ ...charge, lease }))
   );
 
@@ -171,16 +252,13 @@ export const BillingPage: React.FC<BillingPageProps> = ({ announce }) => {
     <div className="billing-page">
       <div className="welcome-block">
         <div>
-          <h2>Charges & Invoices</h2>
+          <h2>{isTenant ? 'My Payments' : 'Billing & Payments'}</h2>
           <p className="muted">
-            {canManage
-              ? 'Record incidentals, generate monthly rent invoices, and track payments.'
-              : 'Review your monthly rent statements, itemized utility charges, and payment receipts.'}
+            {isTenant
+              ? 'Review your rent invoices, make simulated payments, and access payment receipts.'
+              : 'Record incidentals, generate monthly rent invoices, and track payments.'}
           </p>
         </div>
-        <button type="button" className="button secondary" onClick={loadData}>
-          Refresh
-        </button>
       </div>
 
       {canManage && (
@@ -188,7 +266,7 @@ export const BillingPage: React.FC<BillingPageProps> = ({ announce }) => {
           {/* Add Pending Charge Panel */}
           <Panel
             title="Record Pending Charge"
-            description="Charges added here will automatically roll into the tenant's next generated invoice."
+            description="Record a one-time charge for a specific billing period. Re-running invoice generation will not bill it twice."
           >
             <form className="form-grid" onSubmit={handleAddCharge}>
               <Field label="Active Lease" required>
@@ -214,10 +292,14 @@ export const BillingPage: React.FC<BillingPageProps> = ({ announce }) => {
                   onChange={(e) => setChargeCategory(e.target.value as ChargeCategory)}
                 >
                   <option value="CANTEEN">Canteen / Food</option>
-                  <option value="APPLIANCE">Appliance / Electricity</option>
+                  <option value="APPLIANCE">Utility / Appliance</option>
                   <option value="OTHER">Other Miscellaneous</option>
                 </select>
               </Field>
+
+              {chargeCategory === 'APPLIANCE' && <Field label="Utility type" required><select value={chargeUtilityType} onChange={(e) => setChargeUtilityType(e.target.value as typeof chargeUtilityType)}><option value="electricity">Electricity</option><option value="water">Water</option><option value="wifi">Wi-Fi</option></select></Field>}
+
+              <Field label="Charge billing period" required><input type="month" value={chargeBillingPeriod} onChange={(e) => setChargeBillingPeriod(e.target.value)} required /></Field>
 
               <Field label="Description (optional)">
                 <input
@@ -259,23 +341,17 @@ export const BillingPage: React.FC<BillingPageProps> = ({ announce }) => {
             description="Create or update billing statements for all active leases for a given month."
           >
             <div className="generate-tool-box">
-              <Field label="Billing Month" required>
-                <input
-                  type="month"
-                  value={billingPeriod}
-                  onChange={(e) => setBillingPeriod(e.target.value)}
-                />
-              </Field>
+              <Field label="Invoice date" required><input type="date" value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)} required aria-describedby="invoice-date-hint" /></Field>
               <button
                 type="button"
                 className="button primary"
-                disabled={generating || !billingPeriod}
+              disabled={generating || !invoiceDate}
                 onClick={handleGenerateInvoices}
               >
                 {generating ? 'Processing…' : 'Generate Statements'}
               </button>
             </div>
-            <p className="hint-text">
+            <p className="hint-text" id="invoice-date-hint">
               Any pending canteen or appliance charges for active leases will be attached into this month's invoice.
             </p>
           </Panel>
@@ -288,10 +364,88 @@ export const BillingPage: React.FC<BillingPageProps> = ({ announce }) => {
         <ErrorState error={error} retry={loadData} />
       ) : (
         <>
+          {isTenant && <>
+            <div className="tenant-payment-summary">
+              <article><span>Outstanding invoices</span><strong>{outstandingInvoices.length}</strong></article>
+              <article><span>Total outstanding</span><strong>{formatMoney(totalOutstanding)}</strong></article>
+              <article><span>Payment records</span><strong>{invoices.reduce((count, invoice) => count + (invoice.payments?.length || 0), 0)}</strong></article>
+            </div>
+            <Panel title="Outstanding invoices" description="Review rent and additional charges before starting a simulated payment." className="spaced-panel">
+              {outstandingInvoices.length === 0 ? <EmptyState
+                title={invoices.length ? 'No payment due' : 'No invoices yet'}
+                message={invoices.length ? 'Your invoices are settled. Paid statements and receipts are listed below.' : 'No invoices are currently linked to your account. New invoices will appear here when issued.'}
+              /> : <div className="tenant-outstanding-list">
+                {outstandingInvoices.map((invoice) => <article className="tenant-outstanding-card" key={invoice.id}>
+                  <div className="tenant-outstanding-heading"><div><strong>{invoice.invoice_number || `INV-${String(invoice.id).padStart(6, '0')}`}</strong><span>{invoice.lease?.room?.room_number ? `Room ${invoice.lease.room.room_number}` : 'Lease invoice'} · {invoice.billing_period} · Due {formatBusinessDate(invoice.due_date)}</span></div><StatusBadge status={invoice.status} /></div>
+                  <div className="tenant-invoice-breakdown">
+                    <div><span>Rent</span><strong>{formatMoney(invoice.base_rent)}</strong></div>
+                    <div><span>Additional charges</span><strong>{formatMoney(invoice.additional_charges_total)}</strong></div>
+                    {invoice.charges?.map((charge) => <div className="tenant-invoice-charge" key={charge.id}><span>{charge.description || charge.category}</span><strong>{formatMoney(charge.amount)}</strong></div>)}
+                    <div><span>Total invoice</span><strong>{formatMoney(invoice.total_amount_due)}</strong></div>
+                    <div><span>Paid</span><strong>{formatMoney(invoice.amount_paid)}</strong></div>
+                    <div className="tenant-invoice-balance"><span>Balance due</span><strong>{formatMoney(invoice.balance)}</strong></div>
+                  </div>
+                  <button
+                    type="button"
+                    className="button primary tenant-pay-now"
+                    aria-label={`Pay ${formatMoney(invoice.balance)} for invoice ${invoice.invoice_number || invoice.id} with simulated GCash`}
+                    disabled={preparingPaymentId !== null}
+                    onClick={() => void startSimulatedPayment(invoice)}
+                  >
+                    {preparingPaymentId === invoice.id ? 'Loading invoice…' : `Pay Now · ${formatMoney(invoice.balance)}`}
+                  </button>
+                  <button type="button" className="button secondary" onClick={() => void downloadInvoice(invoice)}>Download invoice PDF</button>
+                </article>)}
+              </div>}
+            </Panel>
+            {paidInvoices.length > 0 && <Panel title="Paid invoices" description="Download statements for invoices that have been settled." className="spaced-panel"><div className="table-scroll"><table><thead><tr><th>Invoice</th><th>Billing period</th><th>Room</th><th>Total</th><th>Paid</th><th>Balance</th><th>Due date</th><th>Document</th></tr></thead><tbody>{paidInvoices.map((invoice) => <tr key={invoice.id}><td>{invoice.invoice_number || `INV-${String(invoice.id).padStart(6, '0')}`}</td><td>{invoice.billing_period}</td><td>{invoice.lease?.room?.room_number ? `Room ${invoice.lease.room.room_number}` : '—'}</td><td>{formatMoney(invoice.total_amount_due)}</td><td>{formatMoney(invoice.amount_paid)}</td><td>{formatMoney(invoice.balance)}</td><td>{formatBusinessDate(invoice.due_date)}</td><td><button type="button" className="button secondary sm" onClick={() => void downloadInvoice(invoice)}>Download PDF</button></td></tr>)}</tbody></table></div></Panel>}
+          </>}
+
+          {isTenant && (
+            <Panel
+              title={`Additional Charges (${tenantCharges.length})`}
+              description="Charges recorded for your active or previous leases, including charges not yet added to an invoice."
+              className="spaced-panel"
+            >
+              {tenantCharges.length === 0 ? (
+                <EmptyState message="No additional charges have been recorded for your leases." />
+              ) : (
+                <div className="table-scroll">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Room</th>
+                        <th>Category</th>
+                        <th>Billing Period</th>
+                        <th>Description</th>
+                        <th>Amount</th>
+                        <th>Status</th>
+                        <th>Date Added</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {tenantCharges.map((charge) => (
+                        <tr key={charge.id}>
+                          <td>Room {charge.lease?.room?.room_number || '—'}</td>
+                          <td><span className="category-tag">{chargeCategoryLabel(charge)}</span></td>
+                          <td>{charge.billing_period || 'Unassigned'}</td>
+                          <td>{charge.description || 'Additional charge'}</td>
+                          <td><strong>{formatMoney(charge.amount)}</strong></td>
+                          <td><StatusBadge status={charge.status} /></td>
+                          <td>{charge.created_at ? formatBusinessDate(charge.created_at) : '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </Panel>
+          )}
+
           {canManage && (
             <Panel
               title={`Pending Unbilled Charges (${pendingCharges.length})`}
-              description="Charges awaiting inclusion in the next generated monthly statement."
+              description="One-time charges waiting for their selected billing period to be generated."
             >
               {pendingCharges.length === 0 ? (
                 <EmptyState message="No pending unbilled charges." />
@@ -303,6 +457,7 @@ export const BillingPage: React.FC<BillingPageProps> = ({ announce }) => {
                         <th>Tenant</th>
                         <th>Room</th>
                         <th>Category</th>
+                        <th>Billing Period</th>
                         <th>Description</th>
                         <th>Amount</th>
                         <th>Action</th>
@@ -316,8 +471,9 @@ export const BillingPage: React.FC<BillingPageProps> = ({ announce }) => {
                           </td>
                           <td>Room {charge.lease?.room?.room_number}</td>
                           <td>
-                            <span className="category-tag">{charge.category}</span>
+                            <span className="category-tag">{chargeCategoryLabel(charge)}</span>
                           </td>
+                          <td>{charge.billing_period || 'Unassigned'}</td>
                           <td>{charge.description || 'Additional charge'}</td>
                           <td>
                             <strong>{formatMoney(charge.amount)}</strong>
@@ -340,7 +496,7 @@ export const BillingPage: React.FC<BillingPageProps> = ({ announce }) => {
             </Panel>
           )}
 
-          <Panel
+          {canManage && <Panel
             title={`Billing Statements & Invoices (${invoices.length})`}
             description="Invoices issued to tenants with tracking of balances and payment statuses."
             className="spaced-panel"
@@ -352,6 +508,7 @@ export const BillingPage: React.FC<BillingPageProps> = ({ announce }) => {
                 <table>
                   <thead>
                     <tr>
+                      <th>Invoice #</th>
                       <th>Tenant</th>
                       <th>Room</th>
                       <th>Billing Period</th>
@@ -362,7 +519,7 @@ export const BillingPage: React.FC<BillingPageProps> = ({ announce }) => {
                       <th>Balance</th>
                       <th>Due Date</th>
                       <th>Status</th>
-                      {canManage && <th>Payment</th>}
+                      <th>Payment</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -370,6 +527,7 @@ export const BillingPage: React.FC<BillingPageProps> = ({ announce }) => {
                       const isPaid = invoice.status.toLowerCase() === 'paid';
                       return (
                         <tr key={invoice.id}>
+                          <td>{invoice.invoice_number || `INV-${String(invoice.id).padStart(6, '0')}`}</td>
                           <td>
                             <strong>{invoice.lease?.tenant?.name || 'Tenant'}</strong>
                           </td>
@@ -388,25 +546,27 @@ export const BillingPage: React.FC<BillingPageProps> = ({ announce }) => {
                               {formatMoney(invoice.balance)}
                             </strong>
                           </td>
-                          <td>{invoice.due_date}</td>
+                          <td>{formatBusinessDate(invoice.due_date)}</td>
                           <td>
                             <StatusBadge status={invoice.status} />
                           </td>
-                          {canManage && (
-                            <td>
-                              {!isPaid ? (
+                          <td>
+                            <div className="billing-row-actions">
+                              <button type="button" className="button secondary sm" onClick={() => void downloadInvoice(invoice)}>Invoice PDF</button>
+                              {!isPaid && Number(invoice.balance) > 0 ? (
                                 <button
                                   type="button"
-                                  className="button secondary sm"
-                                  onClick={() => openPaymentModal(invoice)}
+                                  className={`button ${canManage ? 'secondary' : 'primary'} sm`}
+                                  disabled={!canManage && preparingPaymentId !== null}
+                                  onClick={() => canManage ? openPaymentModal(invoice) : void startSimulatedPayment(invoice)}
                                 >
-                                  Record Payment
+                                  {canManage ? 'Record Payment' : preparingPaymentId === invoice.id ? 'Loading…' : 'Pay Now (Simulated)'}
                                 </button>
                               ) : (
                                 <span className="paid-check">✓ Settled</span>
                               )}
-                            </td>
-                          )}
+                            </div>
+                          </td>
                         </tr>
                       );
                     })}
@@ -414,9 +574,13 @@ export const BillingPage: React.FC<BillingPageProps> = ({ announce }) => {
                 </table>
               </div>
             )}
-          </Panel>
+          </Panel>}
+          <PaymentHistory invoices={invoices} landlordOrAdmin={canManage} announce={announce} />
         </>
       )}
+
+      <SimulatedPaymentModal invoice={simulatedInvoice} onClose={() => setSimulatedInvoice(null)} onComplete={handleSimulationComplete} />
+      <PaymentReceipt payment={receiptPayment} invoice={receiptInvoice} onClose={() => { setReceiptPayment(null); setReceiptInvoice(undefined); }} announce={announce} />
 
       {/* Record Payment Modal */}
       <Modal

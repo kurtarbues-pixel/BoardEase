@@ -5,4 +5,5 @@ export * from './inquiry';
 export * from './billing';
 export * from './admin';
 export * from './dashboard';
+export * from './notification';
 

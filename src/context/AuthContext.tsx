@@ -14,6 +14,12 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+const redirectToSignIn = () => {
+  if (window.location.pathname !== '/login' || window.location.search || window.location.hash) {
+    window.history.replaceState({}, '', '/login');
+  }
+};
+
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(Boolean(getToken()));
@@ -31,6 +37,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } catch {
       setUser(null);
       saveToken(null);
+      redirectToSignIn();
     } finally {
       setIsLoading(false);
     }
@@ -40,6 +47,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const handleUnauthorized = () => {
       setUser(null);
       saveToken(null);
+      redirectToSignIn();
     };
 
     window.addEventListener('bhms:unauthorized', handleUnauthorized);
@@ -76,6 +84,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } finally {
       saveToken(null);
       setUser(null);
+      redirectToSignIn();
     }
   };
 

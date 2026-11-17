@@ -14,7 +14,7 @@ export const Notice: React.FC<NoticeProps> = ({ notice, onDismiss }) => {
   if (!notice) return null;
 
   return (
-    <div className={`notice notice-${notice.kind || 'info'}`} role="status">
+    <div className={`notice notice-toast notice-${notice.kind || 'info'}`} role={notice.kind === 'error' ? 'alert' : 'status'} aria-live={notice.kind === 'error' ? 'assertive' : 'polite'}>
       <span>{notice.message}</span>
       <button
         type="button"

@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="BoardEase">
+  <rect x="0" y="0" width="256" height="256" rx="48" fill="#576238"/>
+  <path d="M27 116 128 34l101 82h-27v93H47v-93H27Z" fill="#F0EADC"/>
+  <rect x="110" y="151" width="36" height="58" rx="5" fill="#576238"/>
+  <rect x="65" y="132" width="22" height="22" rx="4" fill="#576238"/>
+  <rect x="169" y="132" width="22" height="22" rx="4" fill="#576238"/>
+</svg>

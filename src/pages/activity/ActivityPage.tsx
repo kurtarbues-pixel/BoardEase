@@ -3,6 +3,8 @@ import { fetchAll } from '../../api/client';
 import { ActivityLog } from '../../types';
 import { Panel } from '../../components/Common/Panel';
 import { LoadingState, EmptyState, ErrorState } from '../../components/Common/States';
+import { formatBusinessDateTime } from '../../utils/date';
+import { BootstrapIcon } from '../../components/Common/BootstrapIcon';
 
 export const ActivityPage: React.FC = () => {
   const [logs, setLogs] = useState<ActivityLog[]>([]);
@@ -45,12 +47,10 @@ export const ActivityPage: React.FC = () => {
             Track user logins, room adjustments, lease records, payment receipts, and administrative changes.
           </p>
         </div>
-        <button type="button" className="button secondary" onClick={loadLogs}>
-          Refresh Logs
-        </button>
       </div>
 
       <div className="search-bar">
+        <BootstrapIcon name="search" className="search-icon" />
         <input
           type="search"
           placeholder="Search activity by action, user, or record…"
@@ -107,7 +107,7 @@ export const ActivityPage: React.FC = () => {
                     return (
                       <tr key={log.id}>
                         <td className="timestamp-cell">
-                          {new Date(log.created_at).toLocaleString()}
+                          {formatBusinessDateTime(log.created_at)}
                         </td>
                         <td>
                           <strong>{log.user?.name || 'System / Guest'}</strong>

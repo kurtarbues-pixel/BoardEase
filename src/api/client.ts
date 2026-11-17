@@ -112,6 +112,25 @@ export async function fetchAll<T>(path: string): Promise<T[]> {
   return rows.concat(...remaining.flat());
 }
 
+export async function downloadProtectedPdf(path: string, filename: string): Promise<void> {
+  const headers = new Headers({ Accept: 'application/pdf', 'X-Requested-With': 'XMLHttpRequest' });
+  const token = getToken();
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+  const response = await fetch(`${API_ROOT}${path}`, { headers });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(payload?.message || `Download failed (${response.status}).`);
+  }
+  const url = URL.createObjectURL(await response.blob());
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 export const formatMoney = (amount: number | string | null | undefined): string => {
   return new Intl.NumberFormat('en-PH', {
     style: 'currency',
@@ -119,6 +138,5 @@ export const formatMoney = (amount: number | string | null | undefined): string 
   }).format(Number(amount || 0));
 };
 
-export const getTodayDateString = (): string => new Date().toISOString().slice(0, 10);
-export const getCurrentMonthString = (): string => new Date().toISOString().slice(0, 7);
+export { getTodayDateString, getCurrentMonthString } from '../utils/date';
 
