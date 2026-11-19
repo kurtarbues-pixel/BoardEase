@@ -18,6 +18,13 @@ export default defineConfig({
   preview: {
     host: '0.0.0.0',
     allowedHosts: true,
+    proxy: {
+      '/api': {
+        target: 'https://backend-bh-production.up.railway.app',
+        changeOrigin: true,
+        secure: true,
+      },
+    },
   },
 });
 
