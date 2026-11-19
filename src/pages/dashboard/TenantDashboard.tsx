@@ -675,7 +675,15 @@ export const TenantDashboard: React.FC<TenantDashboardProps> = ({
                             <div key={room.id} className="rumaya-room-row">
                               {/* Left Thumbnail with Badge */}
                               <div className="room-img-container">
-                                <img src={imageUrl} alt={room.title} className="room-thumb-img" />
+                                <img
+                                  src={imageUrl}
+                                  alt={room.title}
+                                  className="room-thumb-img"
+                                  onError={(e) => {
+                                    e.currentTarget.onerror = null;
+                                    e.currentTarget.src = 'https://images.unsplash.com/photo-1522708323590-d24dbb6b0267?auto=format&fit=crop&w=360&q=80';
+                                  }}
+                                />
                               </div>
 
                               {/* Main Room Info */}

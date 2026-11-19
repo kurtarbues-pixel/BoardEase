@@ -269,7 +269,15 @@ export const LandlordDashboard: React.FC<LandlordDashboardProps> = ({
                   return (
                     <div key={room.id} className="rumaya-room-row">
                       <div className="room-img-container">
-                        <img src={imageUrl} alt={room.title} className="room-thumb-img" />
+                        <img
+                          src={imageUrl}
+                          alt={room.title}
+                          className="room-thumb-img"
+                          onError={(e) => {
+                            e.currentTarget.onerror = null;
+                            e.currentTarget.src = 'https://images.unsplash.com/photo-1522708323590-d24dbb6b0267?auto=format&fit=crop&w=360&q=80';
+                          }}
+                        />
                       </div>
 
                       <div className="room-main-info">
@@ -514,6 +522,10 @@ export const LandlordDashboard: React.FC<LandlordDashboardProps> = ({
                     <img
                       src={selectedPhoto.url}
                       alt={`${detailRoom.title} photo ${detailPhotoIndex + 1}`}
+                      onError={(e) => {
+                        e.currentTarget.onerror = null;
+                        e.currentTarget.src = 'https://images.unsplash.com/photo-1522708323590-d24dbb6b0267?auto=format&fit=crop&w=800&q=80';
+                      }}
                     />
                     {photos.length > 1 && (
                       <>
@@ -631,6 +643,10 @@ export const LandlordDashboard: React.FC<LandlordDashboardProps> = ({
                     <img
                       src={selectedPhoto.url}
                       alt={`${detailRoom.title} photo ${detailPhotoIndex + 1}`}
+                      onError={(e) => {
+                        e.currentTarget.onerror = null;
+                        e.currentTarget.src = 'https://images.unsplash.com/photo-1522708323590-d24dbb6b0267?auto=format&fit=crop&w=800&q=80';
+                      }}
                     />
                   )}
                   {photos.length > 1 && (

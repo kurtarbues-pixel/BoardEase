@@ -879,7 +879,7 @@ export const RoomsPage: React.FC<RoomsPageProps> = ({ announce, onNavigate }) =>
           return <div className="room-detail">
             <div className="room-detail-gallery">
               {selectedPhoto ? <div className="room-gallery-stage">
-                <img src={selectedPhoto.url} alt={`${detailRoom.title} photo ${detailPhotoIndex + 1}`} />
+                <img src={selectedPhoto.url} alt={`${detailRoom.title} photo ${detailPhotoIndex + 1}`} onError={(e) => { e.currentTarget.onerror = null; e.currentTarget.src = 'https://images.unsplash.com/photo-1522708323590-d24dbb6b0267?auto=format&fit=crop&w=800&q=80'; }} />
                 {photos.length > 1 && <>
                   <button type="button" className="room-gallery-arrow previous" onClick={() => movePhoto(-1)} aria-label="Previous room photo">‹</button>
                   <button type="button" className="room-gallery-arrow next" onClick={() => movePhoto(1)} aria-label="Next room photo">›</button>
@@ -910,7 +910,7 @@ export const RoomsPage: React.FC<RoomsPageProps> = ({ announce, onNavigate }) =>
             {showRoomGallery && <div className="room-gallery-lightbox" role="dialog" aria-modal="true" aria-label="Room photo gallery" onMouseDown={(event) => { if (event.target === event.currentTarget) setShowRoomGallery(false); }}>
               <button type="button" className="room-gallery-lightbox-close" onClick={() => setShowRoomGallery(false)} aria-label="Close gallery">×</button>
               {photos.length > 1 && <button type="button" className="room-gallery-arrow previous" onClick={() => movePhoto(-1)} aria-label="Previous room photo">‹</button>}
-              {selectedPhoto && <img src={selectedPhoto.url} alt={`${detailRoom.title} photo ${detailPhotoIndex + 1}`} />}
+              {selectedPhoto && <img src={selectedPhoto.url} alt={`${detailRoom.title} photo ${detailPhotoIndex + 1}`} onError={(e) => { e.currentTarget.onerror = null; e.currentTarget.src = 'https://images.unsplash.com/photo-1522708323590-d24dbb6b0267?auto=format&fit=crop&w=800&q=80'; }} />}
               {photos.length > 1 && <button type="button" className="room-gallery-arrow next" onClick={() => movePhoto(1)} aria-label="Next room photo">›</button>}
               <span className="room-gallery-lightbox-count">{detailPhotoIndex + 1} / {photos.length}</span>
             </div>}
