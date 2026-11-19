@@ -129,6 +129,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSuccessNotice }) => {
       } else {
         await login({
           identifier: identifier.trim(),
+          email: identifier.trim(),
           password,
         });
         onSuccessNotice?.('Signed in successfully.');
