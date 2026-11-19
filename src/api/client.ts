@@ -1,4 +1,8 @@
-const API_ROOT = import.meta.env.VITE_API_URL || '/api';
+const API_ROOT = import.meta.env.VITE_API_URL || (
+  typeof window !== 'undefined' && window.location.hostname.includes('railway.app')
+    ? 'https://backend-bh-production.up.railway.app/api'
+    : '/api'
+);
 const TOKEN_KEY = 'bhms-api-token';
 
 export function getToken(): string | null {
