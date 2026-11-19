@@ -17,30 +17,97 @@ import { MessagesPage } from './pages/messages/MessagesPage';
 import { ReviewsPage } from './pages/reviews/ReviewsPage';
 import { NotificationsPage } from './pages/notifications/NotificationsPage';
 import { ReportsPage } from './pages/reports/ReportsPage';
+import { Role } from './types';
+
+const VALID_PAGES = [
+  'dashboard',
+  'accounts',
+  'rooms',
+  'leases',
+  'inquiries',
+  'billing',
+  'reports',
+  'maintenance',
+  'messages',
+  'reviews',
+  'activity',
+  'profile',
+  'notifications',
+] as const;
+
+type PageId = typeof VALID_PAGES[number];
+
+function resolvePageFromPath(pathname: string): PageId | null {
+  const clean = pathname.replace(/^\/+|\/+$/g, '').toLowerCase();
+  if ((VALID_PAGES as readonly string[]).includes(clean)) {
+    return clean as PageId;
+  }
+  return null;
+}
+
+function getValidPageForUser(pageId: string, role?: Role): PageId {
+  if (!role) return 'dashboard';
+  if (role === 'tenant' && pageId === 'inquiries') return 'leases';
+  if (role === 'admin' && ['leases', 'billing'].includes(pageId)) return 'reports';
+  if (role === 'admin' && pageId === 'inquiries') return 'dashboard';
+  if (pageId === 'profile' || pageId === 'notifications') return pageId as PageId;
+  const isAllowed = NAV_ITEMS.some((item) => item.id === pageId && item.roles.includes(role));
+  return isAllowed ? (pageId as PageId) : 'dashboard';
+}
 
 export const App: React.FC = () => {
   const { user, isLoading, logout } = useAuth();
   const logoutRef = useRef(logout);
   logoutRef.current = logout;
-  const [currentPage, setCurrentPage] = useState<string>('dashboard');
+
+  const [currentPage, setCurrentPage] = useState<PageId>(() => {
+    const fromUrl = resolvePageFromPath(window.location.pathname);
+    return fromUrl || 'dashboard';
+  });
   const [tenantRentalSection, setTenantRentalSection] = useState<'rental' | 'applications'>('rental');
   const [messageLeaseId, setMessageLeaseId] = useState<number | null>(null);
-  const [isResetRoute, setIsResetRoute] = useState(window.location.pathname === '/reset-password');
+  const [isResetRoute, setIsResetRoute] = useState(window.location.pathname.replace(/\/+$/, '') === '/reset-password');
   const [notice, setNotice] = useState<NoticeData | null>(null);
   const noticeTimer = useRef<number | null>(null);
 
+  // Sync route and page state when authenticated user is loaded or changes role
   useEffect(() => {
-    // Do not carry a previous user's page selection into a new session.
-    setCurrentPage('dashboard');
-    setTenantRentalSection('rental');
+    if (!user) return;
+
+    const fromUrl = resolvePageFromPath(window.location.pathname);
+    const validPage = getValidPageForUser(fromUrl || 'dashboard', user.role);
+
+    setCurrentPage(validPage);
     setMessageLeaseId(null);
+
+    const canonicalPath = `/${validPage}`;
+    if (window.location.pathname !== canonicalPath) {
+      window.history.replaceState({}, '', canonicalPath);
+    }
   }, [user?.id, user?.role]);
 
+  // Handle browser Back / Forward buttons (popstate)
   useEffect(() => {
-    const syncResetRoute = () => setIsResetRoute(window.location.pathname.replace(/\/+$/, '') === '/reset-password');
-    window.addEventListener('popstate', syncResetRoute);
-    return () => window.removeEventListener('popstate', syncResetRoute);
-  }, []);
+    const handlePopState = () => {
+      const isReset = window.location.pathname.replace(/\/+$/, '') === '/reset-password';
+      setIsResetRoute(isReset);
+      if (isReset) return;
+
+      if (!user) return;
+
+      const fromUrl = resolvePageFromPath(window.location.pathname);
+      const validPage = getValidPageForUser(fromUrl || 'dashboard', user.role);
+      setCurrentPage(validPage);
+
+      const targetPath = `/${validPage}`;
+      if (window.location.pathname !== targetPath) {
+        window.history.replaceState({}, '', targetPath);
+      }
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [user]);
 
   const announce = useCallback(
     (message: string, kind: 'success' | 'error' | 'warning' | 'info' = 'success') => {
@@ -83,30 +150,42 @@ export const App: React.FC = () => {
     );
   }
 
-  if (isResetRoute) return <ResetPasswordPage onComplete={() => { window.history.replaceState({}, '', '/login?password_reset=1'); setIsResetRoute(false); }} />;
+  if (isResetRoute) {
+    return (
+      <ResetPasswordPage
+        onComplete={() => {
+          window.history.replaceState({}, '', '/login?password_reset=1');
+          setIsResetRoute(false);
+        }}
+      />
+    );
+  }
 
   if (!user) {
     return <AuthPage onSuccessNotice={(msg) => announce(msg, 'success')} />;
   }
 
-  const navigateToPage = (pageId: string) => {
-    if (user.role === 'tenant' && pageId === 'inquiries') {
-      setTenantRentalSection('applications');
-      setCurrentPage('leases');
-      return;
+  const navigateToPage = (pageId: string, replace = false) => {
+    const validPage = getValidPageForUser(pageId, user.role);
+
+    if (user.role === 'tenant') {
+      if (pageId === 'inquiries') {
+        setTenantRentalSection('applications');
+      } else if (pageId === 'leases') {
+        setTenantRentalSection('rental');
+      }
     }
-    if (user.role === 'admin' && ['leases', 'billing'].includes(pageId)) {
-      setCurrentPage('reports');
-      return;
+
+    setCurrentPage(validPage);
+
+    const targetPath = `/${validPage}`;
+    if (window.location.pathname !== targetPath) {
+      if (replace) {
+        window.history.replaceState({}, '', targetPath);
+      } else {
+        window.history.pushState({}, '', targetPath);
+      }
     }
-    if (user.role === 'admin' && pageId === 'inquiries') {
-      setCurrentPage('dashboard');
-      return;
-    }
-    if (user.role === 'tenant' && pageId === 'leases') setTenantRentalSection('rental');
-    const isCommonPage = pageId === 'profile' || pageId === 'notifications';
-    const isAllowedPage = NAV_ITEMS.some((item) => item.id === pageId && item.roles.includes(user.role));
-    setCurrentPage(isCommonPage || isAllowedPage ? pageId : 'dashboard');
   };
 
   const contactLandlord = (leaseId: number) => {
@@ -155,4 +234,3 @@ export const App: React.FC = () => {
     </AppLayout>
   );
 };
-

@@ -183,7 +183,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
       <aside className={`sidebar ${mobileMenuOpen ? 'show' : ''}`}>
         <a
           className="brand"
-          href="#dashboard"
+          href="/dashboard"
           onClick={(e) => {
             e.preventDefault();
             handleNavClick('dashboard');
