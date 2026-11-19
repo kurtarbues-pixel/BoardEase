@@ -127,9 +127,10 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSuccessNotice }) => {
         });
         onSuccessNotice?.(`Your ${accountRole} account was created. You are now logged in.`);
       } else {
+        const idVal = identifier.trim();
         await login({
-          identifier: identifier.trim(),
-          email: identifier.trim(),
+          identifier: idVal,
+          ...(idVal.includes('@') ? { email: idVal } : {}),
           password,
         });
         onSuccessNotice?.('Signed in successfully.');
